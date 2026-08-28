@@ -1,7 +1,9 @@
 'use client';
 
 import { PointerEvent as ReactPointerEvent, useEffect, useMemo, useRef, useState } from 'react';
+import { ensureCloudIdentity, loadCloudProgress, syncCloudAttempt, syncCloudSession } from './cloud';
 import { correctAnswer, Question, questions, unitTopics } from './questions';
+import { isCloudConfigured } from './supabase';
 
 type Mode = 'practice' | 'chapters' | 'graph' | 'mistakes' | 'records';
 type HelpLevel = 'assist' | 'standard' | 'exam';
@@ -23,6 +25,10 @@ type Session = {
 };
 
 const STORE_KEY = 'econlab-progress-v1';
+
+function currentTimestamp() {
+  return Date.now();
+}
 
 function formatTime(seconds: number) {
   const mins = Math.floor(seconds / 60).toString().padStart(2, '0');
@@ -70,8 +76,9 @@ const graphTasks = [
 ] as const;
 
 type Line = { start: { x: number; y: number }; end: { x: number; y: number } };
+type GraphAttempt = { taskId: string; title: string; correct: boolean; answerText: string };
 
-function GraphLab({ onAttempt }: { onAttempt: (correct: boolean) => void }) {
+function GraphLab({ onAttempt }: { onAttempt: (attempt: GraphAttempt) => void }) {
   const canvasRef = useRef<HTMLCanvasElement>(null);
   const [taskIndex, setTaskIndex] = useState(0);
   const [line, setLine] = useState<Line | null>(null);
@@ -151,7 +158,12 @@ function GraphLab({ onAttempt }: { onAttempt: (correct: boolean) => void }) {
     const labelCorrect = labels.y === task.y && labels.x === task.x && labels.curve === task.curve;
     const correct = longEnough && shapeCorrect && labelCorrect;
     setResult(correct ? 'correct' : 'wrong');
-    onAttempt(correct);
+    onAttempt({
+      taskId: task.id,
+      title: task.title,
+      correct,
+      answerText: JSON.stringify({ labels, line }),
+    });
   }
 
   function nextTask() {
@@ -204,30 +216,70 @@ export default function Home() {
   const [checked, setChecked] = useState<boolean | null>(null);
   const [showHint, setShowHint] = useState(false);
   const [profileName, setProfileName] = useState('学生 A');
-  const lastActivityRef = useRef(Date.now());
+  const [cloudStatus, setCloudStatus] = useState<'local' | 'connecting' | 'synced' | 'error'>(() => isCloudConfigured() ? 'connecting' : 'local');
+  const lastActivityRef = useRef(0);
   const sessionIdRef = useRef('');
+  const cloudUserIdRef = useRef<string | null>(null);
+  const questionStartedAtRef = useRef(0);
+  const lastSessionSyncRef = useRef({ active: -1, completed: -1 });
 
   const currentQuestion = questions.find((question) => question.id === currentId) ?? questions[0];
-  const currentSession = sessions.find((session) => session.id === sessionIdRef.current);
+  const currentSession = sessions[sessions.length - 1];
   const completedToday = currentSession?.completed ?? 0;
   const correctToday = currentSession?.correct ?? 0;
 
   useEffect(() => {
-    try {
-      const saved = JSON.parse(localStorage.getItem(STORE_KEY) || '{}');
-      setStats(saved.stats || {});
-      setSessions(saved.sessions || []);
-      setHelpLevel(saved.helpLevel || 'assist');
-      setProfileName(saved.profileName || '学生 A');
-    } catch { /* start with clean local cache */ }
-    const id = typeof crypto !== 'undefined' && crypto.randomUUID ? crypto.randomUUID() : `session-${Date.now()}`;
-    sessionIdRef.current = id;
-    setSessions((existing) => [...existing.slice(-29), { id, start: new Date().toISOString(), activeSeconds: 0, completed: 0, correct: 0 }]);
-    setHydrated(true);
+    lastActivityRef.current = currentTimestamp();
+    questionStartedAtRef.current = currentTimestamp();
+    const timer = window.setTimeout(() => {
+      try {
+        const saved = JSON.parse(localStorage.getItem(STORE_KEY) || '{}');
+        setStats(saved.stats || {});
+        setSessions(saved.sessions || []);
+        setHelpLevel(saved.helpLevel || 'assist');
+        setProfileName(saved.profileName || '学生 A');
+      } catch { /* start with clean local cache */ }
+      const id = typeof crypto !== 'undefined' && crypto.randomUUID ? crypto.randomUUID() : `session-${currentTimestamp()}`;
+      sessionIdRef.current = id;
+      setSessions((existing) => [...existing.slice(-29), { id, start: new Date().toISOString(), activeSeconds: 0, completed: 0, correct: 0 }]);
+      setHydrated(true);
+    }, 0);
+    return () => window.clearTimeout(timer);
   }, []);
 
   useEffect(() => {
-    const markActive = () => { lastActivityRef.current = Date.now(); };
+    if (!hydrated) return;
+    if (!isCloudConfigured()) {
+      return;
+    }
+
+    let cancelled = false;
+    void (async () => {
+      try {
+        const userId = await ensureCloudIdentity(profileName);
+        if (!userId || cancelled) return;
+        cloudUserIdRef.current = userId;
+        const cloudProgress = await loadCloudProgress(userId);
+        if (cancelled) return;
+        setStats((localStats) => {
+          const merged = { ...localStats };
+          Object.entries(cloudProgress).forEach(([questionId, remote]) => {
+            const local = merged[questionId];
+            if (!local || remote.attempts >= local.attempts) merged[questionId] = remote;
+          });
+          return merged;
+        });
+        setCloudStatus('synced');
+      } catch {
+        if (!cancelled) setCloudStatus('error');
+      }
+    })();
+
+    return () => { cancelled = true; };
+  }, [hydrated, profileName]);
+
+  useEffect(() => {
+    const markActive = () => { lastActivityRef.current = currentTimestamp(); };
     window.addEventListener('pointerdown', markActive);
     window.addEventListener('keydown', markActive);
     window.addEventListener('scroll', markActive, { passive: true });
@@ -241,7 +293,7 @@ export default function Home() {
   useEffect(() => {
     if (!hydrated) return;
     const timer = window.setInterval(() => {
-      if (document.visibilityState === 'visible' && Date.now() - lastActivityRef.current < 120000) {
+      if (document.visibilityState === 'visible' && currentTimestamp() - lastActivityRef.current < 120000) {
         setActiveSeconds((value) => value + 1);
         setSessions((items) => items.map((item) => item.id === sessionIdRef.current ? { ...item, activeSeconds: item.activeSeconds + 1 } : item));
       }
@@ -254,6 +306,19 @@ export default function Home() {
     localStorage.setItem(STORE_KEY, JSON.stringify({ stats, sessions, helpLevel, profileName }));
   }, [stats, sessions, helpLevel, profileName, hydrated]);
 
+  useEffect(() => {
+    const userId = cloudUserIdRef.current;
+    const session = sessions.find((item) => item.id === sessionIdRef.current);
+    if (!userId || !session) return;
+    const last = lastSessionSyncRef.current;
+    const shouldSync = session.activeSeconds >= last.active + 15 || session.completed !== last.completed;
+    if (!shouldSync) return;
+    lastSessionSyncRef.current = { active: session.activeSeconds, completed: session.completed };
+    void syncCloudSession(userId, session)
+      .then(() => setCloudStatus('synced'))
+      .catch(() => setCloudStatus('error'));
+  }, [activeSeconds, sessions]);
+
   const mistakeQuestions = useMemo(() => questions.filter((question) => (stats[question.id]?.wrong ?? 0) > 0 && (stats[question.id]?.streak ?? 0) < 2), [stats]);
 
   const recommended = useMemo(() => {
@@ -264,6 +329,7 @@ export default function Home() {
 
   function resetQuestionState() {
     setSelectedChoice(null); setFillAnswer(''); setChecked(null); setShowHint(false);
+    questionStartedAtRef.current = currentTimestamp();
   }
 
   function openQuestion(question: Question, topic: string | null = null) {
@@ -277,12 +343,75 @@ export default function Home() {
     setCurrentId(next.id); resetQuestionState();
   }
 
-  function recordAttempt(question: Question, correct: boolean) {
-    setStats((existing) => {
-      const old = existing[question.id] || { attempts: 0, correct: 0, wrong: 0, streak: 0, lastCorrect: false, lastAnswered: '' };
-      return { ...existing, [question.id]: { attempts: old.attempts + 1, correct: old.correct + (correct ? 1 : 0), wrong: old.wrong + (correct ? 0 : 1), streak: correct ? old.streak + 1 : 0, lastCorrect: correct, lastAnswered: new Date().toISOString() } };
-    });
-    setSessions((items) => items.map((item) => item.id === sessionIdRef.current ? { ...item, completed: item.completed + 1, correct: item.correct + (correct ? 1 : 0) } : item));
+  function recordAttempt(question: Question, correct: boolean, answerText: string, responseMs: number) {
+    const old = stats[question.id] || { attempts: 0, correct: 0, wrong: 0, streak: 0, lastCorrect: false, lastAnswered: '' };
+    const next = { attempts: old.attempts + 1, correct: old.correct + (correct ? 1 : 0), wrong: old.wrong + (correct ? 0 : 1), streak: correct ? old.streak + 1 : 0, lastCorrect: correct, lastAnswered: new Date().toISOString() };
+    const session = sessions.find((item) => item.id === sessionIdRef.current);
+    const nextSession = session ? {
+      ...session,
+      completed: session.completed + 1,
+      correct: session.correct + (correct ? 1 : 0),
+    } : null;
+    setStats((existing) => ({ ...existing, [question.id]: next }));
+    setSessions((items) => items.map((item) => item.id === sessionIdRef.current && nextSession ? nextSession : item));
+    const userId = cloudUserIdRef.current;
+    if (userId && nextSession) {
+      void (async () => {
+        await syncCloudSession(userId, nextSession);
+        await syncCloudAttempt({
+          userId,
+          sessionId: sessionIdRef.current,
+          questionId: question.id,
+          unit: question.unit,
+          topic: question.topic,
+          correct,
+          answerText,
+          responseMs,
+          helpLevel,
+          progress: next,
+        });
+      })().then(() => setCloudStatus('synced')).catch(() => setCloudStatus('error'));
+    }
+  }
+
+  function recordGraphAttempt(attempt: GraphAttempt) {
+    const questionId = `graph:${attempt.taskId}`;
+    const old = stats[questionId] || { attempts: 0, correct: 0, wrong: 0, streak: 0, lastCorrect: false, lastAnswered: '' };
+    const next = {
+      attempts: old.attempts + 1,
+      correct: old.correct + (attempt.correct ? 1 : 0),
+      wrong: old.wrong + (attempt.correct ? 0 : 1),
+      streak: attempt.correct ? old.streak + 1 : 0,
+      lastCorrect: attempt.correct,
+      lastAnswered: new Date().toISOString(),
+    };
+    const session = sessions.find((item) => item.id === sessionIdRef.current);
+    const nextSession = session ? {
+      ...session,
+      completed: session.completed + 1,
+      correct: session.correct + (attempt.correct ? 1 : 0),
+    } : null;
+    setStats((existing) => ({ ...existing, [questionId]: next }));
+    setSessions((items) => items.map((item) => item.id === sessionIdRef.current && nextSession ? nextSession : item));
+
+    const userId = cloudUserIdRef.current;
+    if (userId && nextSession) {
+      void (async () => {
+        await syncCloudSession(userId, nextSession);
+        await syncCloudAttempt({
+          userId,
+          sessionId: sessionIdRef.current,
+          questionId,
+          unit: 'GRAPH',
+          topic: attempt.title,
+          correct: attempt.correct,
+          answerText: attempt.answerText,
+          responseMs: 0,
+          helpLevel,
+          progress: next,
+        });
+      })().then(() => setCloudStatus('synced')).catch(() => setCloudStatus('error'));
+    }
   }
 
   function checkCurrent() {
@@ -290,7 +419,11 @@ export default function Home() {
     const correct = currentQuestion.kind === 'choice'
       ? selectedChoice === currentQuestion.answerIndex
       : isFillCorrect(fillAnswer, currentQuestion.accepted);
-    setChecked(correct); recordAttempt(currentQuestion, correct);
+    const answerText = currentQuestion.kind === 'choice'
+      ? currentQuestion.options?.[selectedChoice ?? -1] ?? ''
+      : fillAnswer.trim();
+    setChecked(correct);
+    recordAttempt(currentQuestion, correct, answerText, currentTimestamp() - questionStartedAtRef.current);
   }
 
   function openToday() {
@@ -333,6 +466,7 @@ export default function Home() {
             <button className={helpLevel === 'standard' ? 'active' : ''} onClick={() => setHelpLevel('standard')}>标准</button>
             <button className={helpLevel === 'exam' ? 'active' : ''} onClick={() => setHelpLevel('exam')}>考试</button>
           </div>
+          <div className={`cloud-pill ${cloudStatus}`} title="云端同步状态">{cloudStatus === 'synced' ? '☁ 已同步' : cloudStatus === 'connecting' ? '☁ 连接中' : cloudStatus === 'error' ? '☁ 待重试' : '本机记录'}</div>
           <div className="session-pill"><span className="pulse" />有效学习 <strong>{formatTime(activeSeconds)}</strong></div>
           <button className="profile-pill" onClick={() => setMode('records')}>{profileName.slice(0, 1)}</button>
         </div>
@@ -376,11 +510,11 @@ export default function Home() {
 
       {mode === 'chapters' && <section className="page-card chapter-page"><div className="section-title-row"><div><p className="eyebrow">CHAPTER PRACTICE</p><h2>按章节打牢基础</h2><p>先选单元，再选择一个小主题。每次只练一个知识范围。</p></div></div><div className="unit-columns">{(['U1', 'U2'] as const).map((unit) => <div className="unit-column" key={unit}><div className="unit-title"><span>{unit}</span><div><strong>{unit === 'U1' ? 'Markets in Action' : 'Macroeconomic Performance'}</strong><small>{unit === 'U1' ? '微观经济学' : '宏观经济学'}</small></div></div>{unitTopics[unit].map(([topic, label], index) => { const value = topicMastery(topic); const count = questions.filter((question) => question.topic === topic).length; return <button className="topic-row" key={topic} onClick={() => openQuestion(questions.find((question) => question.topic === topic)!, topic)}><span className="topic-index">{String(index + 1).padStart(2, '0')}</span><span className="topic-name"><strong>{label}</strong><small>{count} 道基础题</small></span><span className="topic-score"><b>{value}%</b><i><em style={{ width: `${value}%` }} /></i></span><span>→</span></button>; })}</div>)}</div></section>}
 
-      {mode === 'graph' && <GraphLab onAttempt={(correct) => { setSessions((items) => items.map((item) => item.id === sessionIdRef.current ? { ...item, completed: item.completed + 1, correct: item.correct + (correct ? 1 : 0) } : item)); }} />}
+      {mode === 'graph' && <GraphLab onAttempt={recordGraphAttempt} />}
 
       {mode === 'mistakes' && <section className="page-card mistakes-page"><div className="section-title-row"><div><p className="eyebrow">MISTAKE REVIEW</p><h2>错题不是惩罚，是复习路线。</h2><p>连续答对两次后，题目会暂时离开这里。</p></div><span className="big-count">{mistakeQuestions.length}<small>待巩固</small></span></div>{mistakeQuestions.length === 0 ? <div className="empty-state"><span>✓</span><h3>目前没有待巩固的错题</h3><p>继续完成今日练习，新出现的薄弱题目会自动来到这里。</p><button className="primary-button" onClick={openToday}>开始今日练习</button></div> : <div className="mistake-list">{mistakeQuestions.map((question) => <button key={question.id} onClick={() => openQuestion(question)}><span className="mistake-unit">{question.unit}</span><span><strong>{question.prompt}</strong><small>{question.topicZh} · 错误 {stats[question.id].wrong} 次 · 连对 {stats[question.id].streak}/2</small></span><b>重练 →</b></button>)}</div>}</section>}
 
-      {mode === 'records' && <section className="page-card records-page"><div className="section-title-row"><div><p className="eyebrow">LEARNING RECORD</p><h2>学习记录</h2><p>当前为本设备记录；接入 Supabase 后可在教师端跨设备查看。</p></div><button className="export-button" onClick={exportCsv}>导出 CSV</button></div><div className="record-summary"><div><span>总有效学习</span><strong>{Math.floor(totalActive / 60)}<small> 分钟</small></strong></div><div><span>累计答题</span><strong>{totalAttempts}<small> 题</small></strong></div><div><span>总体正确率</span><strong>{overallMastery}<small>%</small></strong></div><div><span>待巩固错题</span><strong>{mistakeQuestions.length}<small> 题</small></strong></div></div><div className="records-grid"><div><h3>章节表现</h3><div className="topic-performance">{[...unitTopics.U1, ...unitTopics.U2].map(([topic, label]) => { const value = topicMastery(topic); return <div key={topic}><span>{label}</span><i><em style={{ width: `${value}%` }} /></i><b>{value}%</b></div>; })}</div></div><div><h3>最近练习</h3><div className="session-list">{sessions.slice().reverse().slice(0, 8).map((session, index) => <div key={session.id}><span className="session-date">{new Date(session.start).toLocaleDateString('zh-CN', { month: 'short', day: 'numeric' })}<small>{new Date(session.start).toLocaleTimeString('zh-CN', { hour: '2-digit', minute: '2-digit' })}</small></span><span><b>{Math.floor(session.activeSeconds / 60)} 分钟</b><small>有效学习</small></span><span><b>{session.completed} 题</b><small>答题量</small></span><span><b>{session.completed ? Math.round(session.correct / session.completed * 100) : 0}%</b><small>正确率</small></span>{index === 0 && <em>本次</em>}</div>)}</div></div></div></section>}
+      {mode === 'records' && <section className="page-card records-page"><div className="section-title-row"><div><p className="eyebrow">LEARNING RECORD</p><h2>学习记录</h2><p>{cloudStatus === 'synced' ? '记录已同步到 Supabase，可继续接入教师端跨设备查看。' : cloudStatus === 'error' ? '云端暂时无法连接，本机记录仍会保留并在恢复后重试。' : '当前为本设备记录；配置 Supabase 环境变量后会自动启用云端同步。'}</p></div><button className="export-button" onClick={exportCsv}>导出 CSV</button></div><div className="record-summary"><div><span>总有效学习</span><strong>{Math.floor(totalActive / 60)}<small> 分钟</small></strong></div><div><span>累计答题</span><strong>{totalAttempts}<small> 题</small></strong></div><div><span>总体正确率</span><strong>{overallMastery}<small>%</small></strong></div><div><span>待巩固错题</span><strong>{mistakeQuestions.length}<small> 题</small></strong></div></div><div className="records-grid"><div><h3>章节表现</h3><div className="topic-performance">{[...unitTopics.U1, ...unitTopics.U2].map(([topic, label]) => { const value = topicMastery(topic); return <div key={topic}><span>{label}</span><i><em style={{ width: `${value}%` }} /></i><b>{value}%</b></div>; })}</div></div><div><h3>最近练习</h3><div className="session-list">{sessions.slice().reverse().slice(0, 8).map((session, index) => <div key={session.id}><span className="session-date">{new Date(session.start).toLocaleDateString('zh-CN', { month: 'short', day: 'numeric' })}<small>{new Date(session.start).toLocaleTimeString('zh-CN', { hour: '2-digit', minute: '2-digit' })}</small></span><span><b>{Math.floor(session.activeSeconds / 60)} 分钟</b><small>有效学习</small></span><span><b>{session.completed} 题</b><small>答题量</small></span><span><b>{session.completed ? Math.round(session.correct / session.completed * 100) : 0}%</b><small>正确率</small></span>{index === 0 && <em>本次</em>}</div>)}</div></div></div></section>}
     </main>
   );
 }

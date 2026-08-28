@@ -11,6 +11,8 @@
 - Demand、Supply、AD、LRAS 手绘直线图训练与标签检查
 - 练习开始时间、有效活跃时长、正确率与章节掌握度
 - 当前设备学习记录与 CSV 导出
+- Supabase 匿名学生身份、云端答题记录与会话同步
+- 教师、班级和学生权限数据模型
 
 ## 本地运行
 
@@ -23,7 +25,9 @@ npm run dev
 
 ## 数据说明
 
-目前进度保存在当前浏览器，适合作为开发和试用阶段的离线缓存。正式发布时将接入 Supabase，届时学生数据会同步到云端，教师可以跨设备查看。公开仓库不得提交 Supabase secret key 或 service-role key。
+浏览器记录作为离线缓存保留；配置 Supabase 环境变量后，学生会自动获得匿名身份，并把练习会话、答题记录和掌握度同步到云端。公开仓库不得提交 Supabase secret key 或 service-role key。
+
+将 `.env.example` 复制为 `.env.local`，填写项目 URL 和 Publishable Key。不要在浏览器环境或 GitHub 中使用 Secret Key。
 
 ## 构建
 

@@ -127,6 +127,10 @@ button { color: inherit; }
 /* Full learning experience */
 .brand { border: 0; background: transparent; padding: 0; cursor: pointer; text-align: left; }
 .header-tools { display: flex; align-items: center; gap: 10px; }
+.cloud-pill { padding: 7px 10px; border: 1px solid var(--line); border-radius: 999px; background: rgba(255,253,248,.76); color: var(--muted); font-size: 9px; font-weight: 750; white-space: nowrap; }
+.cloud-pill.synced { border-color: #b9d8cc; background: var(--green-soft); color: var(--green); }
+.cloud-pill.connecting { color: #8a6b2d; background: #f5eedc; }
+.cloud-pill.error { color: var(--red); background: #fae8e3; }
 .profile-pill { width: 36px; height: 36px; border: 0; border-radius: 50%; cursor: pointer; background: var(--ink); color: white; font-weight: 800; }
 .help-switch { display: flex; padding: 3px; border: 1px solid var(--line); border-radius: 999px; background: rgba(255,253,248,.76); }
 .help-switch button { border: 0; border-radius: 999px; padding: 5px 9px; cursor: pointer; background: transparent; color: var(--muted); font-size: 10px; }
@@ -221,6 +225,7 @@ button { color: inherit; }
 }
 @media (max-width: 600px) {
   .help-switch { display: none; }
+  .cloud-pill { display: none; }
   .compact-hero h1 { font-size: 34px; }
   .compact-hero .today-card { max-width: none; }
   .page-card { margin-left: 14px; margin-right: 14px; padding: 20px 15px; border-radius: 18px; }
