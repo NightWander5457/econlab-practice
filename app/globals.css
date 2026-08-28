@@ -209,6 +209,11 @@ button { color: inherit; }
 .mistake-unit { display: grid; place-items: center; width: 38px; height: 38px; border-radius: 10px; color: white; background: var(--red); font: 700 11px Georgia, serif; }
 .mistake-list strong, .mistake-list small { display: block; }.mistake-list strong { font: 500 14px Georgia, serif; }.mistake-list small { margin-top: 5px; color: var(--muted); font-size: 9px; }.mistake-list button > b { color: var(--red); font-size: 10px; }
 .export-button { border: 1px solid var(--line); background: #f2eee4; }
+.student-identity { display: flex; align-items: end; gap: 12px; margin: 0 0 18px; padding: 14px 16px; border: 1px solid var(--line); border-radius: 14px; background: #fbf8f0; }
+.student-identity label { display: grid; gap: 6px; min-width: 220px; }
+.student-identity label span { color: var(--muted); font-size: 10px; font-weight: 800; letter-spacing: .08em; }
+.student-identity input { width: 100%; border: 1px solid var(--line); border-radius: 9px; background: white; padding: 10px 12px; color: var(--ink); font: inherit; }
+.student-identity > small { align-self: center; color: var(--muted); font-size: 10px; line-height: 1.5; }
 .record-summary { display: grid; grid-template-columns: repeat(4, 1fr); margin-bottom: 25px; border: 1px solid var(--line); border-radius: 17px; overflow: hidden; }
 .record-summary > div { padding: 20px; border-right: 1px solid var(--line); }.record-summary > div:last-child { border: 0; }.record-summary span, .record-summary strong { display: block; }.record-summary span { color: var(--muted); font-size: 10px; }.record-summary strong { margin-top: 9px; font: 600 30px Georgia, serif; }.record-summary small { font-size: 11px; color: var(--muted); }
 .records-grid { display: grid; grid-template-columns: .85fr 1.15fr; gap: 18px; }
@@ -237,6 +242,7 @@ button { color: inherit; }
   .section-title-row { align-items: flex-start; }
   .label-controls { grid-template-columns: 1fr; }
   .record-summary { grid-template-columns: 1fr 1fr; }.record-summary > div:nth-child(2) { border-right: 0; }.record-summary > div { border-bottom: 1px solid var(--line); }.record-summary > div:nth-last-child(-n+2) { border-bottom: 0; }
+  .student-identity { align-items: stretch; flex-direction: column; }.student-identity label { min-width: 0; }
   .session-list > div { grid-template-columns: 1.2fr repeat(3, .8fr); }
   .mistake-list button { grid-template-columns: 36px 1fr; }.mistake-list button > b { display: none; }
 }

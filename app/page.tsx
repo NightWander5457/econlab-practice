@@ -216,6 +216,7 @@ export default function Home() {
   const [checked, setChecked] = useState<boolean | null>(null);
   const [showHint, setShowHint] = useState(false);
   const [profileName, setProfileName] = useState('学生 A');
+  const [profileDraft, setProfileDraft] = useState('学生 A');
   const [cloudStatus, setCloudStatus] = useState<'local' | 'connecting' | 'synced' | 'error'>(() => isCloudConfigured() ? 'connecting' : 'local');
   const lastActivityRef = useRef(0);
   const sessionIdRef = useRef('');
@@ -238,6 +239,7 @@ export default function Home() {
         setSessions(saved.sessions || []);
         setHelpLevel(saved.helpLevel || 'assist');
         setProfileName(saved.profileName || '学生 A');
+        setProfileDraft(saved.profileName || '学生 A');
       } catch { /* start with clean local cache */ }
       const id = typeof crypto !== 'undefined' && crypto.randomUUID ? crypto.randomUUID() : `session-${currentTimestamp()}`;
       sessionIdRef.current = id;
@@ -430,6 +432,14 @@ export default function Home() {
     setSelectedTopic(null); setMode('practice'); setCurrentId(recommended[0]?.id ?? questions[0].id); resetQuestionState();
   }
 
+  function saveProfileName() {
+    const nextName = profileDraft.trim().slice(0, 40);
+    if (!nextName) return;
+    setProfileDraft(nextName);
+    setProfileName(nextName);
+    setCloudStatus(isCloudConfigured() ? 'connecting' : 'local');
+  }
+
   const topicMastery = (topic: string) => {
     const topicQuestions = questions.filter((question) => question.topic === topic);
     const attempted = topicQuestions.reduce((sum, question) => sum + (stats[question.id]?.attempts ?? 0), 0);
@@ -514,7 +524,7 @@ export default function Home() {
 
       {mode === 'mistakes' && <section className="page-card mistakes-page"><div className="section-title-row"><div><p className="eyebrow">MISTAKE REVIEW</p><h2>错题不是惩罚，是复习路线。</h2><p>连续答对两次后，题目会暂时离开这里。</p></div><span className="big-count">{mistakeQuestions.length}<small>待巩固</small></span></div>{mistakeQuestions.length === 0 ? <div className="empty-state"><span>✓</span><h3>目前没有待巩固的错题</h3><p>继续完成今日练习，新出现的薄弱题目会自动来到这里。</p><button className="primary-button" onClick={openToday}>开始今日练习</button></div> : <div className="mistake-list">{mistakeQuestions.map((question) => <button key={question.id} onClick={() => openQuestion(question)}><span className="mistake-unit">{question.unit}</span><span><strong>{question.prompt}</strong><small>{question.topicZh} · 错误 {stats[question.id].wrong} 次 · 连对 {stats[question.id].streak}/2</small></span><b>重练 →</b></button>)}</div>}</section>}
 
-      {mode === 'records' && <section className="page-card records-page"><div className="section-title-row"><div><p className="eyebrow">LEARNING RECORD</p><h2>学习记录</h2><p>{cloudStatus === 'synced' ? '记录已同步到 Supabase，可继续接入教师端跨设备查看。' : cloudStatus === 'error' ? '云端暂时无法连接，本机记录仍会保留并在恢复后重试。' : '当前为本设备记录；配置 Supabase 环境变量后会自动启用云端同步。'}</p></div><button className="export-button" onClick={exportCsv}>导出 CSV</button></div><div className="record-summary"><div><span>总有效学习</span><strong>{Math.floor(totalActive / 60)}<small> 分钟</small></strong></div><div><span>累计答题</span><strong>{totalAttempts}<small> 题</small></strong></div><div><span>总体正确率</span><strong>{overallMastery}<small>%</small></strong></div><div><span>待巩固错题</span><strong>{mistakeQuestions.length}<small> 题</small></strong></div></div><div className="records-grid"><div><h3>章节表现</h3><div className="topic-performance">{[...unitTopics.U1, ...unitTopics.U2].map(([topic, label]) => { const value = topicMastery(topic); return <div key={topic}><span>{label}</span><i><em style={{ width: `${value}%` }} /></i><b>{value}%</b></div>; })}</div></div><div><h3>最近练习</h3><div className="session-list">{sessions.slice().reverse().slice(0, 8).map((session, index) => <div key={session.id}><span className="session-date">{new Date(session.start).toLocaleDateString('zh-CN', { month: 'short', day: 'numeric' })}<small>{new Date(session.start).toLocaleTimeString('zh-CN', { hour: '2-digit', minute: '2-digit' })}</small></span><span><b>{Math.floor(session.activeSeconds / 60)} 分钟</b><small>有效学习</small></span><span><b>{session.completed} 题</b><small>答题量</small></span><span><b>{session.completed ? Math.round(session.correct / session.completed * 100) : 0}%</b><small>正确率</small></span>{index === 0 && <em>本次</em>}</div>)}</div></div></div></section>}
+      {mode === 'records' && <section className="page-card records-page"><div className="section-title-row"><div><p className="eyebrow">LEARNING RECORD</p><h2>学习记录</h2><p>{cloudStatus === 'synced' ? '记录已同步到 Supabase，老师可以按学生姓名核对练习。' : cloudStatus === 'error' ? '云端暂时无法连接，本机记录仍会保留并在恢复后重试。' : '当前为本设备记录；配置 Supabase 环境变量后会自动启用云端同步。'}</p></div><button className="export-button" onClick={exportCsv}>导出 CSV</button></div><div className="student-identity"><label htmlFor="student-name"><span>学生姓名</span><input id="student-name" value={profileDraft} maxLength={40} onChange={(event) => setProfileDraft(event.target.value)} onKeyDown={(event) => { if (event.key === 'Enter') saveProfileName(); }} /></label><button className="ghost-button" onClick={saveProfileName} disabled={!profileDraft.trim() || profileDraft.trim() === profileName}>保存姓名</button><small>请填写真实姓名；练习时长、开始时间和答题记录会以此姓名同步。</small></div><div className="record-summary"><div><span>总有效学习</span><strong>{Math.floor(totalActive / 60)}<small> 分钟</small></strong></div><div><span>累计答题</span><strong>{totalAttempts}<small> 题</small></strong></div><div><span>总体正确率</span><strong>{overallMastery}<small>%</small></strong></div><div><span>待巩固错题</span><strong>{mistakeQuestions.length}<small> 题</small></strong></div></div><div className="records-grid"><div><h3>章节表现</h3><div className="topic-performance">{[...unitTopics.U1, ...unitTopics.U2].map(([topic, label]) => { const value = topicMastery(topic); return <div key={topic}><span>{label}</span><i><em style={{ width: `${value}%` }} /></i><b>{value}%</b></div>; })}</div></div><div><h3>最近练习</h3><div className="session-list">{sessions.slice().reverse().slice(0, 8).map((session, index) => <div key={session.id}><span className="session-date">{new Date(session.start).toLocaleDateString('zh-CN', { month: 'short', day: 'numeric' })}<small>{new Date(session.start).toLocaleTimeString('zh-CN', { hour: '2-digit', minute: '2-digit' })}</small></span><span><b>{Math.floor(session.activeSeconds / 60)} 分钟</b><small>有效学习</small></span><span><b>{session.completed} 题</b><small>答题量</small></span><span><b>{session.completed ? Math.round(session.correct / session.completed * 100) : 0}%</b><small>正确率</small></span>{index === 0 && <em>本次</em>}</div>)}</div></div></div></section>}
     </main>
   );
 }
