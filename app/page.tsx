@@ -1,6 +1,5 @@
 'use client';
 
-import Image from 'next/image';
 import { PointerEvent as ReactPointerEvent, useEffect, useMemo, useRef, useState } from 'react';
 import { ensureCloudIdentity, loadCloudProgress, syncCloudAttempt, syncCloudSession } from './cloud';
 import { correctAnswer, Question, questions, unitTopics } from './questions';
@@ -470,7 +469,9 @@ export default function Home() {
     <main className="app-shell">
       <header className="topbar">
         <button className="brand" onClick={openToday} aria-label="EconLab 首页">
-          <Image className="brand-logo" src={`${ASSET_BASE_PATH}/logo.png`} alt="Young Education" width={159} height={62} priority />
+          {/* Native image loading keeps this shared build compatible with both Next.js and Vinext. */}
+          {/* eslint-disable-next-line @next/next/no-img-element */}
+          <img className="brand-logo" src={`${ASSET_BASE_PATH}/logo.png`} alt="Young Education" width="159" height="62" />
           <span className="brand-divider" />
           <span><strong>经济学通关</strong><small>ECONOMICS PRACTICE</small></span>
         </button>
