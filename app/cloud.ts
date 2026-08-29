@@ -44,7 +44,7 @@ export async function ensureCloudIdentity(displayName: string) {
   return user.id;
 }
 
-export async function loadCloudProgress(userId: string) {
+export async function loadCloudProgress(userId: string): Promise<Record<string, CloudProgress>> {
   const supabase = getSupabaseClient();
   if (!supabase) return {};
 
