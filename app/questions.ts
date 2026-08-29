@@ -1,3 +1,5 @@
+import { ConceptStage, concepts } from './concepts';
+
 export type UnitId = 'U1' | 'U2';
 export type QuestionKind = 'choice' | 'fill';
 
@@ -16,6 +18,8 @@ export type Question = {
   hint: string;
   keywords: Array<[string, string]>;
   explanationZh: string;
+  conceptId?: string;
+  stage?: ConceptStage;
 };
 
 export const unitTopics = {
@@ -38,7 +42,7 @@ export const unitTopics = {
   ],
 } as const;
 
-export const questions: Question[] = [
+const foundationQuestions: Question[] = [
   {
     id: 'u1-positive', unit: 'U1', topic: 'intro', topicZh: '基础概念', kind: 'choice',
     prompt: 'Which statement is a positive statement?', promptZh: '哪一项属于实证性表述？',
@@ -339,6 +343,62 @@ export const questions: Question[] = [
     keywords: [['supply-side policy', '供给侧政策'], ['productive capacity', '生产能力']], explanationZh: '供给侧政策通过改善生产率、劳动技能、竞争或基础设施，提高长期生产能力，使 LRAS 右移。',
   },
 ];
+
+function checksum(value: string) {
+  return [...value].reduce((sum, character) => sum + character.charCodeAt(0), 0);
+}
+
+function choiceOptions(correct: string, alternatives: string[], seed: string) {
+  const distinct = alternatives.filter((item) => item !== correct);
+  const chosen = [correct, distinct[checksum(seed) % distinct.length], distinct[(checksum(seed) + 7) % distinct.length]];
+  const unique = [...new Set(chosen)];
+  while (unique.length < 3) unique.push(`None of these (${unique.length})`);
+  const rotation = checksum(`${seed}:rotate`) % unique.length;
+  const options = [...unique.slice(rotation), ...unique.slice(0, rotation)];
+  return { options, answerIndex: options.indexOf(correct) };
+}
+
+const generatedConceptQuestions: Question[] = concepts.flatMap((concept) => {
+  const peerTerms = concepts.filter((item) => item.topic === concept.topic).map((item) => item.termEn);
+  const recognition = choiceOptions(concept.termEn, peerTerms, `${concept.id}:recognise`);
+  const application = choiceOptions(concept.termEn, peerTerms, `${concept.id}:apply`);
+  const firstLetter = concept.termEn[0]?.toUpperCase() ?? '';
+
+  return [
+    {
+      id: `${concept.id}:recognise`, unit: concept.unit, topic: concept.topic, topicZh: concept.topicZh, kind: 'choice' as const,
+      conceptId: concept.id, stage: 'recognise' as const,
+      prompt: `Which economic term matches this definition? ${concept.definitionEn}`,
+      promptZh: `哪一个经济学术语符合这个定义？${concept.explanationZh}`,
+      options: recognition.options, answerIndex: recognition.answerIndex, answerDisplay: concept.termEn,
+      hint: `先找定义中的主体、变化方向和关键词。中文术语是“${concept.termZh}”。`,
+      keywords: [['definition', '定义'], ['economic term', '经济学术语']],
+      explanationZh: `正确术语是 ${concept.termEn}（${concept.termZh}）。${concept.explanationZh}`,
+    },
+    {
+      id: `${concept.id}:recall`, unit: concept.unit, topic: concept.topic, topicZh: concept.topicZh, kind: 'fill' as const,
+      conceptId: concept.id, stage: 'recall' as const,
+      prompt: `Write the English economic term: ${concept.definitionEn}`,
+      promptZh: `根据定义填写英文经济学术语：${concept.termZh}。`,
+      accepted: [concept.termEn, concept.termEn.replaceAll('-', ' ')], answerDisplay: concept.termEn,
+      hint: `答案首字母是 ${firstLetter}，共 ${concept.termEn.split(/\s+/).length} 个单词。`,
+      keywords: [[`starts with ${firstLetter}`, `首字母 ${firstLetter}`], ['recall', '回忆术语']],
+      explanationZh: `完整英文术语是 ${concept.termEn}。${concept.explanationZh}`,
+    },
+    {
+      id: `${concept.id}:apply`, unit: concept.unit, topic: concept.topic, topicZh: concept.topicZh, kind: 'choice' as const,
+      conceptId: concept.id, stage: 'apply' as const,
+      prompt: `Which concept best applies to this situation? ${concept.exampleEn ?? concept.definitionEn}`,
+      promptZh: `下列情境主要体现哪一个概念？${concept.exampleZh ?? concept.explanationZh}`,
+      options: application.options, answerIndex: application.answerIndex, answerDisplay: concept.termEn,
+      hint: `先判断情境描述的是定义、原因、结果还是政策工具。`,
+      keywords: [['situation', '情境'], ['apply', '应用']],
+      explanationZh: `这个情境对应 ${concept.termEn}（${concept.termZh}）。${concept.explanationZh}`,
+    },
+  ];
+});
+
+export const questions: Question[] = [...generatedConceptQuestions, ...foundationQuestions];
 
 export function correctAnswer(question: Question) {
   if (question.kind === 'choice' && question.options && question.answerIndex !== undefined) {
