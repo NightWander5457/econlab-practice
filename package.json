@@ -10,7 +10,8 @@
     "build": "vinext build",
     "build:pages": "next build",
     "start": "vinext start",
-    "lint": "eslint . --ignore-pattern dist --ignore-pattern .next"
+    "lint": "eslint . --ignore-pattern dist --ignore-pattern .next",
+    "audit:content": "node scripts/audit-content.mjs"
   },
   "dependencies": {
     "@supabase/supabase-js": "^2.112.4",
