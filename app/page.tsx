@@ -15,6 +15,8 @@ type QuestionStat = {
   streak: number;
   lastCorrect: boolean;
   lastAnswered: string;
+  nextReview?: string;
+  reviewLevel?: number;
 };
 type Stats = Record<string, QuestionStat>;
 type Session = {
@@ -75,6 +77,39 @@ const stageMeta: Record<ConceptStage, { short: string; label: string }> = {
   recall: { short: '忆', label: '英文回忆' },
   apply: { short: '用', label: '情境应用' },
 };
+
+const stageQuestionMap = new Map<string, Question[]>();
+questions.forEach((question) => {
+  if (!question.conceptId || !question.stage) return;
+  const key = `${question.conceptId}:${question.stage}`;
+  stageQuestionMap.set(key, [...(stageQuestionMap.get(key) ?? []), question]);
+});
+
+function questionsForStage(conceptId: string, stage: ConceptStage) {
+  return stageQuestionMap.get(`${conceptId}:${stage}`) ?? [];
+}
+
+function hashText(value: string) {
+  return [...value].reduce((hash, char) => ((hash << 5) - hash + char.charCodeAt(0)) | 0, 0);
+}
+
+function reorderOptions<T>(items: T[], seed: string) {
+  if (items.length < 2) return items.map((item, originalIndex) => ({ item, originalIndex }));
+  const shift = Math.abs(hashText(seed)) % items.length;
+  const indexed = items.map((item, originalIndex) => ({ item, originalIndex }));
+  const rotated = [...indexed.slice(shift), ...indexed.slice(0, shift)];
+  return Math.abs(hashText(`${seed}:reverse`)) % 2 ? rotated.reverse() : rotated;
+}
+
+function mixByTopic(items: Question[]) {
+  const groups = new Map<string, Question[]>();
+  items.forEach((question) => groups.set(question.topic, [...(groups.get(question.topic) ?? []), question]));
+  const mixed: Question[] = [];
+  while ([...groups.values()].some((group) => group.length)) {
+    groups.forEach((group) => { const next = group.shift(); if (next) mixed.push(next); });
+  }
+  return mixed;
+}
 
 const graphTasks = [
   { id: 'demand', title: '画出需求曲线', prompt: 'Draw a demand curve and complete all labels.', promptZh: '从左上方向右下方画一条直线，并补全坐标轴与曲线名称。', slope: 'down', y: 'P', x: 'Q', curve: 'D' },
@@ -205,6 +240,12 @@ function DrawLab({ onAttempt }: { onAttempt: (attempt: GraphAttempt) => void }) 
           onPointerCancel={() => setDrawing(false)}
         />
         <div className="label-controls">
+          <div className="keyboard-draw"><strong>键盘作图</strong><span>选择你判断的方向</span><div>{([
+            ['向右下', { start: { x: 145, y: 80 }, end: { x: 555, y: 300 } }],
+            ['向右上', { start: { x: 145, y: 300 }, end: { x: 555, y: 80 } }],
+            ['水平', { start: { x: 145, y: 200 }, end: { x: 555, y: 200 } }],
+            ['竖直', { start: { x: 350, y: 60 }, end: { x: 350, y: 315 } }],
+          ] as Array<[string, Line]>).map(([label, preset]) => <button key={label} onClick={() => { setLine(preset); setResult(null); }}>{label}</button>)}</div></div>
           <label>纵轴 Y-axis<select value={labels.y} onChange={(event) => setLabels({ ...labels, y: event.target.value })}><option value="">选择标注</option>{labelOptions.map((item) => <option key={item}>{item}</option>)}</select></label>
           <label>横轴 X-axis<select value={labels.x} onChange={(event) => setLabels({ ...labels, x: event.target.value })}><option value="">选择标注</option>{labelOptions.map((item) => <option key={item}>{item}</option>)}</select></label>
           <label>曲线 Curve<select value={labels.curve} onChange={(event) => setLabels({ ...labels, curve: event.target.value })}><option value="">选择标注</option>{labelOptions.map((item) => <option key={item}>{item}</option>)}</select></label>
@@ -250,12 +291,14 @@ function DiagramDrill({ onAttempt }: { onAttempt: (attempt: GraphAttempt) => voi
   const [selected, setSelected] = useState<number | null>(null);
   const [result, setResult] = useState<'correct' | 'wrong' | null>(null);
   const task = diagramTasks[taskIndex];
+  const displayedOptions = useMemo(() => reorderOptions(task.options, `diagram:${task.id}`), [task]);
+  const displayedAnswerIndex = displayedOptions.findIndex((option) => option.originalIndex === task.answerIndex);
 
   function check() {
     if (selected === null || result) return;
-    const correct = selected === task.answerIndex;
+    const correct = selected === displayedAnswerIndex;
     setResult(correct ? 'correct' : 'wrong');
-    onAttempt({ taskId: `read:${task.id}`, title: task.title, correct, answerText: task.options[selected] });
+    onAttempt({ taskId: `read:${task.id}`, title: task.title, correct, answerText: displayedOptions[selected].item });
   }
 
   function next() {
@@ -277,7 +320,7 @@ function DiagramDrill({ onAttempt }: { onAttempt: (attempt: GraphAttempt) => voi
         {task.guides?.map((guide, index) => <g key={index}><line x1={guide.x1} y1={guide.y1} x2={guide.x2} y2={guide.y2} stroke={guide.color ?? '#8b857d'} strokeWidth="1.5" strokeDasharray="6 5" />{guide.label && <text x={guide.x} y={guide.y} fill={guide.color ?? '#5d574f'} fontSize="12" fontWeight="700">{guide.label}</text>}</g>)}
         {task.curves.map((curve) => <g key={curve.label}><path d={curve.path} fill="none" stroke={curve.color ?? '#183ccc'} strokeWidth="4" strokeLinecap="round" strokeDasharray={curve.dash} /><text x={curve.x} y={curve.y} fill={curve.color ?? '#183ccc'} fontFamily="Georgia" fontSize="15" fontStyle="italic" fontWeight="700">{curve.label}</text></g>)}
       </svg>
-      <div className="diagram-options">{task.options.map((option, index) => <button key={option} disabled={result !== null} className={`${selected === index ? 'selected' : ''} ${result && index === task.answerIndex ? 'correct' : ''} ${result === 'wrong' && selected === index ? 'wrong' : ''}`} onClick={() => setSelected(index)}><span>{String.fromCharCode(65 + index)}</span>{option}</button>)}</div>
+      <div className="diagram-options">{displayedOptions.map(({ item: option }, index) => <button key={option} disabled={result !== null} className={`${selected === index ? 'selected' : ''} ${result && index === displayedAnswerIndex ? 'correct' : ''} ${result === 'wrong' && selected === index ? 'wrong' : ''}`} onClick={() => setSelected(index)}><span>{String.fromCharCode(65 + index)}</span>{option}</button>)}</div>
     </div>
     {result && <div className={`feedback ${result === 'correct' ? 'is-correct' : 'is-wrong'}`}><strong>{result === 'correct' ? '读图正确。' : '这张图还需要再看一次。'}</strong><p>{task.explanationZh}</p></div>}
     <div className="graph-actions"><span className="diagram-note">先看坐标轴，再看原曲线与新曲线，最后判断均衡变化。</span><button className="primary-button" disabled={selected === null} onClick={result ? next : check}>{result ? '下一张图 →' : '检查判断 →'}</button></div>
@@ -302,6 +345,10 @@ export default function Home() {
   const [fillAnswer, setFillAnswer] = useState('');
   const [checked, setChecked] = useState<boolean | null>(null);
   const [showHint, setShowHint] = useState(false);
+  const [focusMode, setFocusMode] = useState(false);
+  const [dailyGraphActive, setDailyGraphActive] = useState(false);
+  const [dailyGraphDone, setDailyGraphDone] = useState(false);
+  const [openKnowledgeTopics, setOpenKnowledgeTopics] = useState<Record<string, boolean>>({});
   const [profileName, setProfileName] = useState('学生 A');
   const [profileDraft, setProfileDraft] = useState('学生 A');
   const [cloudStatus, setCloudStatus] = useState<'local' | 'connecting' | 'synced' | 'error'>(() => isCloudConfigured() ? 'connecting' : 'local');
@@ -356,7 +403,7 @@ export default function Home() {
           const merged = { ...localStats };
           Object.entries(cloudProgress).forEach(([questionId, remote]) => {
             const local = merged[questionId];
-            if (!local || remote.attempts >= local.attempts) merged[questionId] = remote;
+            if (!local || remote.attempts > local.attempts) merged[questionId] = { ...remote, nextReview: local?.nextReview, reviewLevel: local?.reviewLevel };
           });
           return merged;
         });
@@ -385,10 +432,10 @@ export default function Home() {
     if (!hydrated) return;
     const timer = window.setInterval(() => {
       if (document.visibilityState === 'visible' && currentTimestamp() - lastActivityRef.current < 120000) {
-        setActiveSeconds((value) => value + 1);
-        setSessions((items) => items.map((item) => item.id === sessionIdRef.current ? { ...item, activeSeconds: item.activeSeconds + 1 } : item));
+        setActiveSeconds((value) => value + 5);
+        setSessions((items) => items.map((item) => item.id === sessionIdRef.current ? { ...item, activeSeconds: item.activeSeconds + 5 } : item));
       }
-    }, 1000);
+    }, 5000);
     return () => window.clearInterval(timer);
   }, [hydrated]);
 
@@ -410,33 +457,40 @@ export default function Home() {
       .catch(() => setCloudStatus('error'));
   }, [activeSeconds, sessions]);
 
-  const questionStagePassed = (conceptId: string, stage: ConceptStage, threshold = 2) => questions
-    .filter((question) => question.conceptId === conceptId && question.stage === stage)
+  const questionStagePassed = (conceptId: string, stage: ConceptStage, threshold = 2) => questionsForStage(conceptId, stage)
     .some((question) => (stats[question.id]?.streak ?? 0) >= threshold);
 
   const conceptStageState = (conceptId: string, stage: ConceptStage) => {
-    const stageQuestions = questions.filter((question) => question.conceptId === conceptId && question.stage === stage);
+    const stageQuestions = questionsForStage(conceptId, stage);
     const attempts = stageQuestions.reduce((sum, question) => sum + (stats[question.id]?.attempts ?? 0), 0);
     if (stageQuestions.some((question) => (stats[question.id]?.streak ?? 0) >= 2)) return 'passed';
     return attempts > 0 ? 'learning' : 'new';
   };
 
   const mistakeQuestions = useMemo(() => questions.filter((question) => (stats[question.id]?.wrong ?? 0) > 0 && (stats[question.id]?.streak ?? 0) < 2), [stats]);
+  const graphQuestionIds = useMemo(() => [
+    ...graphTasks.map((task) => `graph:${task.id}`),
+    ...diagramTasks.map((task) => `graph:read:${task.id}`),
+  ], []);
+  const mistakeGraphIds = useMemo(() => graphQuestionIds.filter((id) => (stats[id]?.wrong ?? 0) > 0 && (stats[id]?.streak ?? 0) < 2), [graphQuestionIds, stats]);
 
   const recommended = useMemo(() => {
-    const passedOnce = (conceptId: string, stage: ConceptStage) => questions
-      .filter((question) => question.conceptId === conceptId && question.stage === stage)
+    const passedOnce = (conceptId: string, stage: ConceptStage) => questionsForStage(conceptId, stage)
       .some((question) => (stats[question.id]?.streak ?? 0) >= 1);
     const unlocked = questions.filter((question) => {
       if (!question.conceptId || !question.stage || question.stage === 'recognise') return true;
       if (question.stage === 'recall') return passedOnce(question.conceptId, 'recognise');
       return passedOnce(question.conceptId, 'recall');
     });
-    const due = unlocked.filter((question) => (stats[question.id]?.wrong ?? 0) > 0 && (stats[question.id]?.streak ?? 0) < 2);
+    const now = currentTimestamp();
+    const due = unlocked.filter((question) => {
+      const item = stats[question.id];
+      return item && ((item.wrong > 0 && item.streak < 2) || (item.nextReview && new Date(item.nextReview).getTime() <= now));
+    });
     const unseen = unlocked.filter((question) => !stats[question.id]);
     const learning = unlocked.filter((question) => stats[question.id] && (stats[question.id]?.streak ?? 0) < 2 && (stats[question.id]?.wrong ?? 0) === 0);
     const stable = unlocked.filter((question) => (stats[question.id]?.streak ?? 0) >= 2);
-    return [...due, ...unseen.slice(0, 6), ...learning, ...unseen.slice(6), ...stable]
+    return [...mixByTopic(due), ...mixByTopic(unseen), ...mixByTopic(learning), ...mixByTopic(stable)]
       .filter((question, index, array) => array.findIndex((item) => item.id === question.id) === index);
   }, [stats]);
 
@@ -446,10 +500,15 @@ export default function Home() {
   }
 
   function openQuestion(question: Question, topic: string | null = null) {
-    setCurrentId(question.id); setSelectedTopic(topic); setMode('practice'); resetQuestionState();
+    setDailyGraphActive(false); setCurrentId(question.id); setSelectedTopic(topic); setMode('practice'); resetQuestionState();
   }
 
   function chooseNext() {
+    if (!selectedTopic && completedToday > 0 && completedToday < 12 && completedToday % 4 === 3) {
+      setDailyGraphDone(false);
+      setDailyGraphActive(true);
+      return;
+    }
     const dueIndex = reviewQueueRef.current.findIndex((item) => item.dueAfter <= completedToday && item.questionId !== currentId);
     if (dueIndex >= 0) {
       const [due] = reviewQueueRef.current.splice(dueIndex, 1);
@@ -464,7 +523,9 @@ export default function Home() {
 
   function recordAttempt(question: Question, correct: boolean, answerText: string, responseMs: number) {
     const old = stats[question.id] || { attempts: 0, correct: 0, wrong: 0, streak: 0, lastCorrect: false, lastAnswered: '' };
-    const next = { attempts: old.attempts + 1, correct: old.correct + (correct ? 1 : 0), wrong: old.wrong + (correct ? 0 : 1), streak: correct ? old.streak + 1 : 0, lastCorrect: correct, lastAnswered: new Date().toISOString() };
+    const reviewLevel = correct ? Math.min(4, (old.reviewLevel ?? 0) + 1) : 0;
+    const reviewDelay = correct ? [1, 3, 7, 14][reviewLevel - 1] * 86400000 : 10 * 60000;
+    const next = { attempts: old.attempts + 1, correct: old.correct + (correct ? 1 : 0), wrong: old.wrong + (correct ? 0 : 1), streak: correct ? old.streak + 1 : 0, lastCorrect: correct, lastAnswered: new Date().toISOString(), nextReview: new Date(currentTimestamp() + reviewDelay).toISOString(), reviewLevel };
     const session = sessions.find((item) => item.id === sessionIdRef.current);
     const nextSession = session ? {
       ...session,
@@ -501,6 +562,8 @@ export default function Home() {
   function recordGraphAttempt(attempt: GraphAttempt) {
     const questionId = `graph:${attempt.taskId}`;
     const old = stats[questionId] || { attempts: 0, correct: 0, wrong: 0, streak: 0, lastCorrect: false, lastAnswered: '' };
+    const reviewLevel = attempt.correct ? Math.min(4, (old.reviewLevel ?? 0) + 1) : 0;
+    const reviewDelay = attempt.correct ? [1, 3, 7, 14][reviewLevel - 1] * 86400000 : 10 * 60000;
     const next = {
       attempts: old.attempts + 1,
       correct: old.correct + (attempt.correct ? 1 : 0),
@@ -508,6 +571,8 @@ export default function Home() {
       streak: attempt.correct ? old.streak + 1 : 0,
       lastCorrect: attempt.correct,
       lastAnswered: new Date().toISOString(),
+      nextReview: new Date(currentTimestamp() + reviewDelay).toISOString(),
+      reviewLevel,
     };
     const session = sessions.find((item) => item.id === sessionIdRef.current);
     const nextSession = session ? {
@@ -538,6 +603,12 @@ export default function Home() {
     }
   }
 
+  function recordDailyGraphAttempt(attempt: GraphAttempt) {
+    if (dailyGraphDone) return;
+    recordGraphAttempt(attempt);
+    setDailyGraphDone(true);
+  }
+
   function checkCurrent() {
     if (checked !== null) return;
     const correct = currentQuestion.kind === 'choice'
@@ -551,7 +622,8 @@ export default function Home() {
   }
 
   function openToday() {
-    setSelectedTopic(null); setMode('practice'); setCurrentId(recommended[0]?.id ?? questions[0].id); resetQuestionState();
+    const graphIsNext = completedToday > 0 && completedToday < 12 && completedToday % 4 === 3;
+    setDailyGraphActive(graphIsNext); setDailyGraphDone(false); setSelectedTopic(null); setMode('practice'); setCurrentId(recommended[0]?.id ?? questions[0].id); resetQuestionState();
   }
 
   function saveProfileName() {
@@ -569,12 +641,20 @@ export default function Home() {
     return topicConcepts.length ? Math.round((passedStages / (topicConcepts.length * 3)) * 100) : 0;
   };
 
+  const conceptMastery = (conceptId?: string) => {
+    if (!conceptId) return 0;
+    const passed = (['recognise', 'recall', 'apply'] as ConceptStage[]).filter((stage) => questionStagePassed(conceptId, stage)).length;
+    return Math.round((passed / 3) * 100);
+  };
+
   const totalAttempts = Object.values(stats).reduce((sum, item) => sum + item.attempts, 0);
   const totalCorrect = Object.values(stats).reduce((sum, item) => sum + item.correct, 0);
   const totalActive = sessions.reduce((sum, session) => sum + session.activeSeconds, 0);
   const overallMastery = totalAttempts ? Math.round((totalCorrect / totalAttempts) * 100) : 0;
   const masteredConcepts = concepts.filter((concept) => (['recognise', 'recall', 'apply'] as ConceptStage[])
     .every((stage) => questionStagePassed(concept.id, stage))).length;
+  const masteredGraphs = graphQuestionIds.filter((id) => (stats[id]?.streak ?? 0) >= 2).length;
+  const courseMastery = Math.round(((masteredConcepts * 3 + masteredGraphs) / (concepts.length * 3 + graphQuestionIds.length)) * 100);
 
   function exportCsv() {
     const rows = [['题目ID', '单元', '主题', '知识点', '练习层级', '尝试次数', '正确次数', '错误次数', '连续答对', '最后练习']];
@@ -595,9 +675,30 @@ export default function Home() {
     const anchor = document.createElement('a'); anchor.href = url; anchor.download = `EconLab-${profileName}-学习记录.csv`; anchor.click(); URL.revokeObjectURL(url);
   }
 
+  const optionRound = Math.max(0, (stats[currentQuestion.id]?.attempts ?? 0) - (checked !== null ? 1 : 0));
+  const displayedOptions = reorderOptions(currentQuestion.options ?? [], `${currentQuestion.id}:${optionRound}`);
+  const fillWordBank = (() => {
+    if (currentQuestion.kind !== 'fill') return [];
+    const correct = currentQuestion.accepted?.[0] ?? '';
+    const related = questions.filter((question) => question.kind === 'fill' && question.topic === currentQuestion.topic && question.id !== currentQuestion.id)
+      .map((question) => question.accepted?.[0] ?? '').filter(Boolean);
+    return reorderOptions([...new Set([correct, ...related.slice(0, 2)])], `fill:${currentQuestion.id}`).map((item) => item.item);
+  })();
+  const currentConceptMastery = conceptMastery(currentConcept?.id);
+  const currentTopicMastery = topicMastery(currentQuestion.topic);
+  const totalMistakes = mistakeQuestions.length + mistakeGraphIds.length;
   const canCheck = currentQuestion.kind === 'choice' ? selectedChoice !== null : fillAnswer.trim().length > 0;
+
+  function speakCurrentQuestion() {
+    if (!('speechSynthesis' in window)) return;
+    window.speechSynthesis.cancel();
+    const utterance = new SpeechSynthesisUtterance(currentQuestion.prompt);
+    utterance.lang = 'en-GB';
+    utterance.rate = 0.82;
+    window.speechSynthesis.speak(utterance);
+  }
   return (
-    <main className="app-shell">
+    <main className={`app-shell ${focusMode ? 'focus-mode' : ''}`}>
       <header className="topbar">
         <button className="brand" onClick={openToday} aria-label="EconLab 首页">
           {/* Native image loading keeps this shared build compatible with both Next.js and Vinext. */}
@@ -608,45 +709,52 @@ export default function Home() {
         </button>
         <div className="header-tools">
           <div className="help-switch" aria-label="语言辅助等级">
-            <button className={helpLevel === 'assist' ? 'active' : ''} onClick={() => setHelpLevel('assist')}>辅助</button>
-            <button className={helpLevel === 'standard' ? 'active' : ''} onClick={() => setHelpLevel('standard')}>标准</button>
-            <button className={helpLevel === 'exam' ? 'active' : ''} onClick={() => setHelpLevel('exam')}>考试</button>
+            <button className={helpLevel === 'assist' ? 'active' : ''} onClick={() => setHelpLevel('assist')}>双语辅助</button>
+            <button className={helpLevel === 'standard' ? 'active' : ''} onClick={() => setHelpLevel('standard')}>关键词提示</button>
+            <button className={helpLevel === 'exam' ? 'active' : ''} onClick={() => setHelpLevel('exam')}>全英文</button>
           </div>
-          <div className={`cloud-pill ${cloudStatus}`} title="云端同步状态">{cloudStatus === 'synced' ? '☁ 已同步' : cloudStatus === 'connecting' ? '☁ 连接中' : cloudStatus === 'error' ? '☁ 待重试' : '本机记录'}</div>
+          <button className={`focus-toggle ${focusMode ? 'active' : ''}`} onClick={() => setFocusMode((value) => !value)}>{focusMode ? '退出专注' : '专注练习'}</button>
+          <div className={`cloud-pill ${cloudStatus}`} title="学习记录保存状态">{cloudStatus === 'synced' ? '本次记录已保存' : cloudStatus === 'connecting' ? '正在保存' : cloudStatus === 'error' ? '稍后自动重试' : '已保存在本机'}</div>
           <div className="session-pill"><span className="pulse" />有效学习 <strong>{formatTime(activeSeconds)}</strong></div>
           <button className="profile-pill" onClick={() => setMode('records')}>{profileName.slice(0, 1)}</button>
         </div>
       </header>
 
-      <section className="compact-hero" id="top">
-        <div><p className="eyebrow">TODAY · 今日训练</p><h1>先理解，再记住，最后会用。</h1><p>两本讲义已拆分为 {concepts.length} 个知识点。每个概念依次通过识别、回忆和应用三关。</p></div>
-        <div className="today-card"><div className="ring" style={{ background: `conic-gradient(var(--brand) ${Math.min(100, completedToday / 12 * 100)}%, #eaddc7 0)` }}><span>{completedToday}<small>/12</small></span></div><div><p>今日目标</p><strong>完成 12 道基础题</strong><small>{completedToday >= 12 ? '今天的目标已完成' : `还差 ${12 - completedToday} 题 · 正确 ${correctToday} 题`}</small></div></div>
-      </section>
+      {mode === 'practice' && !selectedTopic && <section className="compact-hero" id="top">
+        <div><p className="eyebrow">TODAY · 今日小任务</p><h1>{completedToday >= 12 ? '今天完成了，做得很好。' : `现在只做第 ${Math.min(12, completedToday + 1)} 步。`}</h1><p>今天共 12 步：9 次概念练习 + 3 次图形练习。一次只看一道，不用担心整本讲义。</p></div>
+        <div className="today-card"><div className="ring" style={{ background: `conic-gradient(var(--brand) ${Math.min(100, completedToday / 12 * 100)}%, #eaddc7 0)` }}><span>{completedToday}<small>/12</small></span></div><div><p>今日进度</p><strong>{completedToday >= 12 ? '任务已完成' : `还剩 ${12 - completedToday} 步`}</strong><small>概念与图形都会计入 · 已答对 {correctToday} 次</small></div></div>
+      </section>}
 
       <nav className="mode-tabs" aria-label="练习模式">
-        <button className={mode === 'practice' && !selectedTopic ? 'active' : ''} onClick={openToday}>今日复习 <span>{Math.min(12, recommended.length)}</span></button>
+        <button className={mode === 'practice' && !selectedTopic ? 'active' : ''} onClick={openToday}>今日 12 步 <span>{Math.min(12, completedToday)}</span></button>
         <button className={mode === 'chapters' || selectedTopic ? 'active' : ''} onClick={() => setMode('chapters')}>章节练习</button>
         <button className={mode === 'graph' ? 'active' : ''} onClick={() => setMode('graph')}>图形训练室</button>
-        <button className={mode === 'mistakes' ? 'active' : ''} onClick={() => setMode('mistakes')}>错题本 <span className="warn">{mistakeQuestions.length}</span></button>
-        <button className={mode === 'records' ? 'active' : ''} onClick={() => setMode('records')}>学习记录</button>
+        <button className={mode === 'mistakes' ? 'active' : ''} onClick={() => setMode('mistakes')}>需要再练 <span className="warn">{totalMistakes}</span></button>
+        <button className={mode === 'records' ? 'active' : ''} onClick={() => setMode('records')}>我的进度</button>
       </nav>
 
-      {mode === 'practice' && (
+      {mode === 'practice' && dailyGraphActive && <section className="daily-graph-step">
+        <div className="daily-step-banner"><span>第 {Math.min(12, completedToday + (dailyGraphDone ? 0 : 1))} 步</span><div><strong>今天的图形关</strong><p>完成一次绘图或读图判断。图形也会进入错题与间隔复习。</p></div><b>{dailyGraphDone ? '已完成 ✓' : '完成后继续概念题'}</b></div>
+        <GraphLab onAttempt={recordDailyGraphAttempt} />
+        {dailyGraphDone && <div className="daily-graph-continue"><button className="primary-button" onClick={() => { setDailyGraphActive(false); setDailyGraphDone(false); chooseNext(); }}>返回今日练习 →</button></div>}
+      </section>}
+
+      {mode === 'practice' && !dailyGraphActive && (
         <section className="practice-layout">
           <article className="question-card">
             <div className="question-meta"><span className="unit-tag">{currentQuestion.unit} · {currentQuestion.topicZh}</span><span>本次已完成 {completedToday} 题</span></div>
             <div className="progress"><i style={{ width: `${Math.min(100, completedToday / 12 * 100)}%` }} /></div>
-            <div className="question-heading"><span className="question-number">{String((completedToday % 12) + 1).padStart(2, '0')}</span><div><p className="question-type">{currentQuestion.stage && <span className={`stage-chip ${currentQuestion.stage}`}>{stageMeta[currentQuestion.stage].short} · {stageMeta[currentQuestion.stage].label}</span>}{currentQuestion.kind === 'choice' ? '单项选择 · MULTIPLE CHOICE' : '关键词填空 · FILL THE BLANK'}</p><h2>{currentQuestion.prompt}</h2>{helpLevel !== 'exam' && <p className="translation">{currentQuestion.promptZh}</p>}</div></div>
-            {helpLevel === 'assist' && <div className="keyword-help"><span>语言辅助</span><p>{currentQuestion.keywords.map(([english, chinese]) => <span key={english}><strong>{english}</strong> {chinese}　</span>)}</p></div>}
-            {currentQuestion.kind === 'choice' && currentQuestion.options && <div className="answers">{currentQuestion.options.map((option, index) => { const selected = selectedChoice === index; const showCorrect = checked !== null && index === currentQuestion.answerIndex; const showWrong = checked === false && selected; return <button key={option} disabled={checked !== null} className={`${selected ? 'selected' : ''} ${showCorrect ? 'correct' : ''} ${showWrong ? 'wrong' : ''}`} onClick={() => setSelectedChoice(index)}><span>{String.fromCharCode(65 + index)}</span>{option}{showCorrect && <b>✓</b>}{showWrong && <b>×</b>}</button>; })}</div>}
-            {currentQuestion.kind === 'fill' && <div className="fill-area"><label htmlFor="fill-answer">Your answer · 输入英文答案</label><div><input id="fill-answer" autoComplete="off" value={fillAnswer} disabled={checked !== null} onChange={(event) => setFillAnswer(event.target.value)} onKeyDown={(event) => { if (event.key === 'Enter' && canCheck) checkCurrent(); }} placeholder="Type the missing word..." />{checked !== null && <span className={checked ? 'ok' : 'no'}>{checked ? '✓' : '×'}</span>}</div><small>大小写不影响结果；较长单词允许 1 个字母的轻微拼写错误。</small></div>}
-            {showHint && checked === null && <div className="hint-box"><strong>提示</strong>{currentQuestion.hint}</div>}
-            {checked !== null && <div className={`feedback ${checked ? 'is-correct' : 'is-wrong'}`} role="status"><strong>{checked ? (stats[currentId]?.streak ?? 0) >= 2 ? '连续答对两次，这一关已通过。' : '答对了，6 题后会再确认一次。' : '这道题已进入复习队列，3 题后再次出现。'}</strong><p>{currentQuestion.explanationZh}</p>{!checked && <p className="correct-answer">正确答案：<b>{correctAnswer(currentQuestion)}</b></p>}</div>}
-            <footer className="question-actions"><button className="ghost-button" onClick={() => setShowHint((value) => !value)} disabled={checked !== null}>{showHint ? '收起提示' : '给我一个提示'}</button>{checked === null ? <button className="primary-button" disabled={!canCheck} onClick={checkCurrent}>检查答案 <span>→</span></button> : <button className="primary-button" onClick={chooseNext}>下一题 <span>→</span></button>}</footer>
+            <div className="question-heading"><span className="question-number">{String((completedToday % 12) + 1).padStart(2, '0')}</span><div><p className="question-type">{currentQuestion.stage && <span className={`stage-chip ${currentQuestion.stage}`}>{stageMeta[currentQuestion.stage].short} · {stageMeta[currentQuestion.stage].label}</span>}{currentQuestion.kind === 'choice' ? '单项选择 · MULTIPLE CHOICE' : '关键词填空 · FILL THE BLANK'}</p><div className="prompt-row"><h2>{currentQuestion.prompt}</h2><button className="speak-button" onClick={speakCurrentQuestion} aria-label="朗读英文题目" title="慢速朗读英文">▶</button></div>{helpLevel === 'assist' && <p className="translation">{currentQuestion.promptZh}</p>}</div></div>
+            {helpLevel !== 'exam' && <div className="keyword-help"><span>{helpLevel === 'assist' ? '双语拆解' : '关键词'}</span><p>{currentQuestion.keywords.map(([english, chinese]) => <span key={english}><strong>{english}</strong>{helpLevel === 'assist' ? ` ${chinese}` : ''}　</span>)}</p></div>}
+            {currentQuestion.kind === 'choice' && currentQuestion.options && <div className="answers">{displayedOptions.map(({ item: option, originalIndex }, displayIndex) => { const selected = selectedChoice === originalIndex; const showCorrect = checked !== null && originalIndex === currentQuestion.answerIndex; const showWrong = checked === false && selected; return <button key={`${originalIndex}:${option}`} disabled={checked !== null} className={`${selected ? 'selected' : ''} ${showCorrect ? 'correct' : ''} ${showWrong ? 'wrong' : ''}`} onClick={() => setSelectedChoice(originalIndex)}><span>{String.fromCharCode(65 + displayIndex)}</span>{option}{showCorrect && <b>✓</b>}{showWrong && <b>×</b>}</button>; })}</div>}
+            {currentQuestion.kind === 'fill' && <div className="fill-area"><label htmlFor="fill-answer">Your answer · 输入英文答案</label>{helpLevel === 'assist' && fillWordBank.length > 1 && <div className="word-bank"><span>可选词</span>{fillWordBank.map((word) => <button key={word} disabled={checked !== null} onClick={() => setFillAnswer(word)}>{word}</button>)}</div>}<div><input id="fill-answer" autoComplete="off" value={fillAnswer} disabled={checked !== null} onChange={(event) => setFillAnswer(event.target.value)} onKeyDown={(event) => { if (event.key === 'Enter' && canCheck) checkCurrent(); }} placeholder="Type the missing word..." />{checked !== null && <span className={checked ? 'ok' : 'no'}>{checked ? '✓' : '×'}</span>}</div><small>大小写不影响结果；较长单词允许 1 个字母的轻微拼写错误。</small></div>}
+            {showHint && checked === null && helpLevel !== 'exam' && <div className="hint-box"><strong>提示</strong>{currentQuestion.hint}</div>}
+            {checked !== null && <div className={`feedback ${checked ? 'is-correct' : 'is-wrong'}`} role="status"><strong>{checked ? (stats[currentId]?.streak ?? 0) >= 2 ? '这一关已通过。' : '答对了，稍后会再次确认。' : '没关系，这道题会很快再出现。'}</strong>{helpLevel === 'exam' ? <p>{checked ? 'Correct.' : `Correct answer: ${correctAnswer(currentQuestion)}`}</p> : <div className="feedback-steps"><p><span>{checked ? '为什么正确' : '错在哪里'}</span>{currentQuestion.explanationZh}</p><p><span>记忆句</span>{currentQuestion.promptZh} → <b>{correctAnswer(currentQuestion)}</b></p><p><span>下一步</span>{checked ? '先继续做题，系统会在合适的时间再次检查。' : '看一遍正确答案，继续前进；3 题后重新作答。'}</p></div>}</div>}
+            <footer className="question-actions">{helpLevel !== 'exam' ? <button className="ghost-button" onClick={() => setShowHint((value) => !value)} disabled={checked !== null}>{showHint ? '收起提示' : '给我一个提示'}</button> : <span />}{checked === null ? <button className="primary-button" disabled={!canCheck} onClick={checkCurrent}>检查答案 <span>→</span></button> : <button className="primary-button" onClick={chooseNext}>下一题 <span>→</span></button>}</footer>
           </article>
           <aside className="side-panel">
-            <div className="panel-heading"><div><p className="eyebrow">MASTERY</p><h3>{currentConcept?.termZh ?? currentQuestion.topicZh}</h3>{currentConcept && <small>{currentConcept.termEn}</small>}</div><strong>{topicMastery(currentQuestion.topic)}%</strong></div>
-            <div className="mastery-message"><span className={`status-dot ${topicMastery(currentQuestion.topic) >= 70 ? 'good' : topicMastery(currentQuestion.topic) > 0 ? 'mid' : 'low'}`} /><div><strong>{masteryLabel(topicMastery(currentQuestion.topic))}</strong><p>正确率只是参考，系统还会观察连续答对和错题重练。</p></div></div>
+            <div className="panel-heading"><div><p className="eyebrow">当前知识点</p><h3>{currentConcept?.termZh ?? currentQuestion.topicZh}</h3>{currentConcept && <small>{currentConcept.termEn}</small>}</div><strong>{currentConceptMastery}%</strong></div>
+            <div className="mastery-message"><span className={`status-dot ${currentConceptMastery >= 70 ? 'good' : currentConceptMastery > 0 ? 'mid' : 'low'}`} /><div><strong>{masteryLabel(currentConceptMastery)}</strong><p>本知识点 {currentConceptMastery}% · 所属章节 {currentTopicMastery}%</p></div></div>
             {currentConcept && <div className="stage-ladder">{(['recognise', 'recall', 'apply'] as ConceptStage[]).map((stage) => { const state = conceptStageState(currentConcept.id, stage); return <div key={stage} className={state}><span>{stageMeta[stage].short}</span><p><strong>{stageMeta[stage].label}</strong><small>{state === 'passed' ? '已通过' : state === 'learning' ? '练习中' : '未开始'}</small></p></div>; })}</div>}
             <div className="quick-stats"><div><b>{stats[currentId]?.attempts ?? 0}</b><span>尝试</span></div><div><b>{stats[currentId]?.wrong ?? 0}</b><span>错误</span></div><div><b>{stats[currentId]?.streak ?? 0}</b><span>连对</span></div></div>
             <div className="mini-chart" aria-label="需求曲线示意图"><span className="axis-y">P</span><span className="axis-x">Q</span><i className="demand-line" /><b>D</b></div>
@@ -655,19 +763,19 @@ export default function Home() {
         </section>
       )}
 
-      {mode === 'chapters' && <section className="page-card chapter-page"><div className="section-title-row"><div><p className="eyebrow">CHAPTER PRACTICE</p><h2>按章节打牢基础</h2><p>每个知识点包含识别、英文回忆和情境应用三层练习。</p></div><span className="big-count">{concepts.length}<small>知识点</small></span></div><div className="unit-columns">{(['U1', 'U2'] as const).map((unit) => <div className="unit-column" key={unit}><div className="unit-title"><span>{unit}</span><div><strong>{unit === 'U1' ? 'Markets in Action' : 'Macroeconomic Performance'}</strong><small>{unit === 'U1' ? '微观经济学' : '宏观经济学'}</small></div></div>{unitTopics[unit].map(([topic, label], index) => { const value = topicMastery(topic); const count = questions.filter((question) => question.topic === topic).length; const conceptCount = concepts.filter((concept) => concept.topic === topic).length; return <button className="topic-row" key={topic} onClick={() => openQuestion(questions.find((question) => question.topic === topic)!, topic)}><span className="topic-index">{String(index + 1).padStart(2, '0')}</span><span className="topic-name"><strong>{label}</strong><small>{conceptCount} 个知识点 · {count} 道练习</small></span><span className="topic-score"><b>{value}%</b><i><em style={{ width: `${value}%` }} /></i></span><span>→</span></button>; })}</div>)}</div></section>}
+      {mode === 'chapters' && <section className="page-card chapter-page"><div className="section-title-row"><div><p className="eyebrow">CHAPTER PRACTICE</p><h2>按小组打牢基础</h2><p>每组只练 6–8 个概念，完成后休息一下，再开始下一组。</p></div><span className="micro-pack-badge">每组约 6 分钟</span></div><div className="unit-columns">{(['U1', 'U2'] as const).map((unit) => <div className="unit-column" key={unit}><div className="unit-title"><span>{unit}</span><div><strong>{unit === 'U1' ? 'Markets in Action' : 'Macroeconomic Performance'}</strong><small>{unit === 'U1' ? '微观经济学' : '宏观经济学'}</small></div></div>{unitTopics[unit].map(([topic, label], index) => { const value = topicMastery(topic); const conceptCount = concepts.filter((concept) => concept.topic === topic).length; const packCount = Math.ceil(conceptCount / 7); return <button className="topic-row" key={topic} onClick={() => openQuestion(questions.find((question) => question.topic === topic)!, topic)}><span className="topic-index">{String(index + 1).padStart(2, '0')}</span><span className="topic-name"><strong>{label}</strong><small>{packCount} 个小组 · 每组 6–8 个概念</small></span><span className="topic-score"><b>{value}%</b><i><em style={{ width: `${value}%` }} /></i></span><span>→</span></button>; })}</div>)}</div></section>}
 
       {mode === 'graph' && <GraphLab onAttempt={recordGraphAttempt} />}
 
-      {mode === 'mistakes' && <section className="page-card mistakes-page"><div className="section-title-row"><div><p className="eyebrow">MISTAKE REVIEW</p><h2>错题不是惩罚，是复习路线。</h2><p>连续答对两次后，题目会暂时离开这里。</p></div><span className="big-count">{mistakeQuestions.length}<small>待巩固</small></span></div>{mistakeQuestions.length === 0 ? <div className="empty-state"><span>✓</span><h3>目前没有待巩固的错题</h3><p>继续完成今日练习，新出现的薄弱题目会自动来到这里。</p><button className="primary-button" onClick={openToday}>开始今日练习</button></div> : <div className="mistake-list">{mistakeQuestions.map((question) => <button key={question.id} onClick={() => openQuestion(question)}><span className="mistake-unit">{question.unit}</span><span><strong>{question.prompt}</strong><small>{question.topicZh} · 错误 {stats[question.id].wrong} 次 · 连对 {stats[question.id].streak}/2</small></span><b>重练 →</b></button>)}</div>}</section>}
+      {mode === 'mistakes' && <section className="page-card mistakes-page"><div className="section-title-row"><div><p className="eyebrow">REVIEW NEXT · 需要再练</p><h2>这里是下一步，不是惩罚。</h2><p>答错后会在本次练习中快速重现，并在 1、3、7、14 天后再次复习。</p></div><span className="big-count">{totalMistakes}<small>待巩固</small></span></div>{totalMistakes === 0 ? <div className="empty-state"><span>✓</span><h3>目前没有待巩固内容</h3><p>继续完成今日练习，新发现的薄弱概念和图形会自动来到这里。</p><button className="primary-button" onClick={openToday}>开始今日练习</button></div> : <div className="mistake-list">{mistakeQuestions.map((question) => <button key={question.id} onClick={() => openQuestion(question)}><span className="mistake-unit">{question.unit}</span><span><strong>{question.prompt}</strong><small>{question.topicZh} · 错误 {stats[question.id].wrong} 次 · 连对 {stats[question.id].streak}/2</small></span><b>重练 →</b></button>)}{mistakeGraphIds.length > 0 && <button onClick={() => setMode('graph')}><span className="mistake-unit graph">图</span><span><strong>图形专项有 {mistakeGraphIds.length} 项需要再练</strong><small>包括绘图方向、坐标轴、曲线标注或读图判断</small></span><b>进入图形室 →</b></button>}</div>}</section>}
 
       {mode === 'records' && <section className="page-card records-page">
-        <div className="section-title-row"><div><p className="eyebrow">LEARNING RECORD</p><h2>学习记录</h2><p>{cloudStatus === 'synced' ? '记录已同步到 Supabase，老师可以按学生姓名核对练习。' : cloudStatus === 'error' ? '云端暂时无法连接，本机记录仍会保留并在恢复后重试。' : '当前为本设备记录；配置 Supabase 环境变量后会自动启用云端同步。'}</p></div><button className="export-button" onClick={exportCsv}>导出 CSV</button></div>
+        <div className="section-title-row"><div><p className="eyebrow">MY PROGRESS</p><h2>我的进度</h2><p>{cloudStatus === 'synced' ? '本次学习记录已保存，老师可以按学生姓名核对。' : cloudStatus === 'error' ? '暂时无法保存到云端，本机记录仍会保留并稍后重试。' : '当前记录已保存在本设备。'}</p></div><button className="export-button" onClick={exportCsv}>老师导出记录</button></div>
         <div className="student-identity"><label htmlFor="student-name"><span>学生姓名</span><input id="student-name" value={profileDraft} maxLength={40} onChange={(event) => setProfileDraft(event.target.value)} onKeyDown={(event) => { if (event.key === 'Enter') saveProfileName(); }} /></label><button className="ghost-button" onClick={saveProfileName} disabled={!profileDraft.trim() || profileDraft.trim() === profileName}>保存姓名</button><small>请填写真实姓名；练习时长、开始时间和答题记录会以此姓名同步。</small></div>
-        <div className="coverage-banner"><div><span>讲义覆盖</span><strong>{concepts.length}<small> 个知识点</small></strong></div><div><span>完全掌握</span><strong>{masteredConcepts}<small> / {concepts.length}</small></strong></div><p>“完全掌握”要求识别、英文回忆和情境应用三关都连续答对两次。</p></div>
+        <div className="coverage-banner"><div><span>课程掌握度</span><strong>{courseMastery}<small>%</small></strong></div><div><span>图形已通过</span><strong>{masteredGraphs}<small> / {graphQuestionIds.length}</small></strong></div><p>概念需要通过识别、英文回忆和情境应用三关；图形需要连续正确两次。全部内容仍可在下方展开查看。</p></div>
         <div className="record-summary"><div><span>总有效学习</span><strong>{Math.floor(totalActive / 60)}<small> 分钟</small></strong></div><div><span>累计答题</span><strong>{totalAttempts}<small> 题</small></strong></div><div><span>总体正确率</span><strong>{overallMastery}<small>%</small></strong></div><div><span>待巩固错题</span><strong>{mistakeQuestions.length}<small> 题</small></strong></div></div>
         <div className="records-grid"><div><h3>章节表现</h3><div className="topic-performance">{[...unitTopics.U1, ...unitTopics.U2].map(([topic, label]) => { const value = topicMastery(topic); return <div key={topic}><span>{label}</span><i><em style={{ width: `${value}%` }} /></i><b>{value}%</b></div>; })}</div></div><div><h3>最近练习</h3><div className="session-list">{sessions.slice().reverse().slice(0, 8).map((session, index) => <div key={session.id}><span className="session-date">{new Date(session.start).toLocaleDateString('zh-CN', { month: 'short', day: 'numeric' })}<small>{new Date(session.start).toLocaleTimeString('zh-CN', { hour: '2-digit', minute: '2-digit' })}</small></span><span><b>{Math.floor(session.activeSeconds / 60)} 分钟</b><small>有效学习</small></span><span><b>{session.completed} 题</b><small>答题量</small></span><span><b>{session.completed ? Math.round(session.correct / session.completed * 100) : 0}%</b><small>正确率</small></span>{index === 0 && <em>本次</em>}</div>)}</div></div></div>
-        <div className="knowledge-map"><div className="knowledge-map-title"><div><p className="eyebrow">KNOWLEDGE MAP</p><h3>知识点通关地图</h3></div><div className="stage-key"><span><i className="passed">认</i>识别</span><span><i className="passed">忆</i>回忆</span><span><i className="passed">用</i>应用</span></div></div>{[...unitTopics.U1, ...unitTopics.U2].map(([topic, label]) => { const topicConcepts = concepts.filter((concept) => concept.topic === topic); const mastered = topicConcepts.filter((concept) => (['recognise', 'recall', 'apply'] as ConceptStage[]).every((stage) => questionStagePassed(concept.id, stage))).length; return <details key={topic}><summary><span>{label}</span><small>{mastered} / {topicConcepts.length} 完全掌握</small><b>{topicMastery(topic)}%</b></summary><div className="concept-list">{topicConcepts.map((concept) => <div key={concept.id}><span><strong>{concept.termZh}</strong><small>{concept.termEn}</small></span><div>{(['recognise', 'recall', 'apply'] as ConceptStage[]).map((stage) => <i key={stage} title={stageMeta[stage].label} className={conceptStageState(concept.id, stage)}>{stageMeta[stage].short}</i>)}</div></div>)}</div></details>; })}</div>
+        <div className="knowledge-map"><div className="knowledge-map-title"><div><p className="eyebrow">KNOWLEDGE MAP</p><h3>知识点通关地图</h3></div><div className="stage-key"><span><i className="passed">认</i>识别</span><span><i className="passed">忆</i>回忆</span><span><i className="passed">用</i>应用</span></div></div>{[...unitTopics.U1, ...unitTopics.U2].map(([topic, label]) => { const topicConcepts = concepts.filter((concept) => concept.topic === topic); const mastered = topicConcepts.filter((concept) => (['recognise', 'recall', 'apply'] as ConceptStage[]).every((stage) => questionStagePassed(concept.id, stage))).length; const isOpen = Boolean(openKnowledgeTopics[topic]); return <details key={topic} open={isOpen} onToggle={(event) => setOpenKnowledgeTopics((current) => ({ ...current, [topic]: event.currentTarget.open }))}><summary><span>{label}</span><small>{mastered} / {topicConcepts.length} 完全掌握</small><b>{topicMastery(topic)}%</b></summary>{isOpen && <div className="concept-list">{topicConcepts.map((concept) => <div key={concept.id}><span><strong>{concept.termZh}</strong><small>{concept.termEn}</small></span><div>{(['recognise', 'recall', 'apply'] as ConceptStage[]).map((stage) => <i key={stage} title={stageMeta[stage].label} className={conceptStageState(concept.id, stage)}>{stageMeta[stage].short}</i>)}</div></div>)}</div>}</details>; })}</div>
       </section>}
     </main>
   );
