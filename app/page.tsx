@@ -1,5 +1,6 @@
 'use client';
 
+import Image from 'next/image';
 import { PointerEvent as ReactPointerEvent, useEffect, useMemo, useRef, useState } from 'react';
 import { ensureCloudIdentity, loadCloudProgress, syncCloudAttempt, syncCloudSession } from './cloud';
 import { correctAnswer, Question, questions, unitTopics } from './questions';
@@ -25,6 +26,7 @@ type Session = {
 };
 
 const STORE_KEY = 'econlab-progress-v1';
+const ASSET_BASE_PATH = process.env.NEXT_PUBLIC_BASE_PATH ?? '';
 
 function currentTimestamp() {
   return Date.now();
@@ -468,7 +470,9 @@ export default function Home() {
     <main className="app-shell">
       <header className="topbar">
         <button className="brand" onClick={openToday} aria-label="EconLab 首页">
-          <span className="brand-mark">E</span><span><strong>EconLab</strong><small>基础经济学训练</small></span>
+          <Image className="brand-logo" src={`${ASSET_BASE_PATH}/logo.png`} alt="Young Education" width={159} height={62} priority />
+          <span className="brand-divider" />
+          <span><strong>经济学通关</strong><small>ECONOMICS PRACTICE</small></span>
         </button>
         <div className="header-tools">
           <div className="help-switch" aria-label="语言辅助等级">
@@ -484,7 +488,7 @@ export default function Home() {
 
       <section className="compact-hero" id="top">
         <div><p className="eyebrow">TODAY · 今日训练</p><h1>先理解，再记住，最后会用。</h1><p>系统会优先安排错题和未掌握概念。连续答对两次，才暂时离开错题本。</p></div>
-        <div className="today-card"><div className="ring" style={{ background: `conic-gradient(var(--green) ${Math.min(100, completedToday / 12 * 100)}%, #dedbd1 0)` }}><span>{completedToday}<small>/12</small></span></div><div><p>今日目标</p><strong>完成 12 道基础题</strong><small>{completedToday >= 12 ? '今天的目标已完成' : `还差 ${12 - completedToday} 题 · 正确 ${correctToday} 题`}</small></div></div>
+        <div className="today-card"><div className="ring" style={{ background: `conic-gradient(var(--brand) ${Math.min(100, completedToday / 12 * 100)}%, #eaddc7 0)` }}><span>{completedToday}<small>/12</small></span></div><div><p>今日目标</p><strong>完成 12 道基础题</strong><small>{completedToday >= 12 ? '今天的目标已完成' : `还差 ${12 - completedToday} 题 · 正确 ${correctToday} 题`}</small></div></div>
       </section>
 
       <nav className="mode-tabs" aria-label="练习模式">

@@ -19,6 +19,7 @@ jobs:
     runs-on: ubuntu-latest
     env:
       GITHUB_PAGES: "true"
+      NEXT_PUBLIC_BASE_PATH: /econlab-practice
       NEXT_PUBLIC_SITE_URL: https://nightwander5457.github.io/econlab-practice/
       NEXT_PUBLIC_SUPABASE_URL: https://zkummcpvebrjbhhotvfl.supabase.co
       NEXT_PUBLIC_SUPABASE_PUBLISHABLE_KEY: sb_publishable_5-ZzRC9GV4ZblATfZS_FHw_w6D8C68Q
